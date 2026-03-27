@@ -12,7 +12,7 @@ import os
 import io
 import base64
 from datetime import datetime
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.state import State, StatesGroup
@@ -457,7 +457,8 @@ async def btn_clear(message: types.Message):
     await cmd_clear(message)
 
 # ===== ОБРАБОТЧИК ФОТО =====
-@dp.message(content_types=["photo"])
+
+@dp.message(F.photo)
 async def handle_photo(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.username
@@ -466,6 +467,7 @@ async def handle_photo(message: types.Message):
         await message.answer("🔐 Сначала авторизуйтесь: /login")
         return
     
+    # ... остальной код обработки фото ...
     await bot.send_chat_action(message.chat.id, "typing")
     
     processing_msg = await message.answer("📸 Обрабатываю фото... Распознаю текст...")

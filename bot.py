@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TELEGRAM БОТ С KIMI K-2.5 (MOONSHOT AI)
+TELEGRAM БОТ С GEMINI API
 АДМИН-ПАНЕЛЬ | ВАЙТ-ЛИСТ | РЕШЕНИЕ ЗАДАЧ ПО ФОТО
 РАЗРАБОТЧИК: Тороп Никита
 """
@@ -10,7 +10,6 @@ import aiohttp
 import json
 import os
 import io
-import base64
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -18,22 +17,26 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
+from google import genai
 
 # ===== НАСТРОЙКИ =====
 # Telegram
 TOKEN = os.environ.get("BOT_TOKEN", "8360813002:AAFe0ONoF76RswDIIQIKpCyL2G0vS3kpnBg")
 
-# Moonshot AI (Kimi K-2.5)
-MOONSHOT_KEY = os.environ.get("MOONSHOT_KEY", "sk-3M12jfKGQrscfyq53fprthWUc8gJX4xmXe2pUY80bRQDWOn7")
+# Gemini API
+GEMINI_KEY = os.environ.get("GEMINI_KEY", "AIzaSyDQduvDY0JsQaseVRXnUuqiLSrPSz6pC9M")
 
 # Админ
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "fuexu")  # без @
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "fuexu")
 PASSWORD = os.environ.get("PASSWORD", "admin123")
 
 # ===== ИНИЦИАЛИЗАЦИЯ =====
 storage = MemoryStorage()
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=storage)
+
+# Клиент Gemini
+client = genai.Client(api_key=GEMINI_KEY)
 
 # Хранилище
 authorized_users = {}
@@ -86,61 +89,35 @@ admin_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# ===== ФУНКЦИЯ KIMI K-2.5 API =====
-async def ask_kimi(prompt, history=None):
-    """Запрос к Kimi K-2.5 (Moonshot AI)"""
+# ===== ФУНКЦИЯ GEMINI API =====
+async def ask_gemini(prompt, history=None):
+    """Запрос к Gemini API"""
     try:
-        # Формируем сообщения с историей
-        messages = []
+        # Формируем полный промпт с историей
+        if history and len(history) > 0:
+            context = "\n".join([msg["content"] for msg in history[-5:]])
+            full_prompt = f"Предыдущий диалог:\n{context}\n\nТекущий вопрос:\n{prompt}"
+        else:
+            full_prompt = prompt
         
-        # Системный промпт (задаёт поведение модели)
-        messages.append({
-            "role": "system",
-            "content": "Ты — полезный ассистент. Ты помогаешь решать задачи по школьным предметам, отвечаешь на вопросы, помогаешь с программированием. Отвечай на русском языке, подробно и понятно."
-        })
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=full_prompt
+        )
+        return response.text
         
-        # Добавляем историю диалога (последние 10 сообщений)
-        if history:
-            for msg in history[-10:]:
-                messages.append(msg)
-        
-        # Добавляем текущий вопрос
-        messages.append({"role": "user", "content": prompt})
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://api.moonshot.ai/v1/chat/completions",
-                json={
-                    "model": "kimi-k2.5",
-                    "messages": messages,
-                    "max_tokens": 4096,
-                    "temperature": 0.7
-                },
-                headers={
-                    "Authorization": f"Bearer {MOONSHOT_KEY}",
-                    "Content-Type": "application/json"
-                },
-                timeout=aiohttp.ClientTimeout(total=60)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data["choices"][0]["message"]["content"]
-                elif resp.status == 401:
-                    return "⚠️ *Ошибка авторизации API (401)*\n\nПроверьте API ключ Moonshot. Получить ключ можно на platform.moonshot.ai"
-                elif resp.status == 429:
-                    return "⚠️ *Превышен лимит запросов (429)*\n\nПодождите немного и попробуйте снова."
-                else:
-                    error_text = await resp.text()
-                    return f"⚠️ *Ошибка API* (статус {resp.status})\n\nПопробуйте позже."
-                    
-    except asyncio.TimeoutError:
-        return "⚠️ *Превышено время ожидания*\n\nСервер API не отвечает. Попробуйте позже."
     except Exception as e:
-        return f"⚠️ *Ошибка подключения:* {str(e)}"
+        error_str = str(e)
+        if "429" in error_str:
+            return "⚠️ *Превышен лимит запросов.*\n\nПодождите минуту и попробуйте снова."
+        elif "API key" in error_str:
+            return "⚠️ *Ошибка API ключа.*\n\nПроверьте настройки Gemini API."
+        else:
+            return f"⚠️ *Ошибка Gemini:* {error_str[:200]}"
 
 # ===== ФУНКЦИЯ ДЛЯ ФОТО (OCR) =====
 async def extract_text_from_photo(file_bytes):
-    """Извлечение текста из фото (простой OCR)"""
+    """Извлечение текста из фото"""
     try:
         import pytesseract
         from PIL import Image
@@ -175,14 +152,14 @@ async def cmd_start(message: types.Message):
     if is_authorized(user_id, username):
         keyboard = admin_keyboard if is_admin(username) else main_keyboard
         await message.answer(
-            "🤖 *Добро пожаловать!*\n\n✅ Вы уже авторизованы.\n\n🤖 Модель: Kimi K-2.5 (Moonshot AI)",
+            "🤖 *Добро пожаловать!*\n\n✅ Вы уже авторизованы.\n\n🤖 Модель: Google Gemini 2.0 Flash",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
         return
     
     await message.answer(
-        "🤖 *Добро пожаловать!*\n\n🤖 Модель: Kimi K-2.5\n\n🔐 Введите /login для входа.",
+        "🤖 *Добро пожаловать!*\n\n🤖 Модель: Google Gemini 2.0 Flash\n\n🔐 Введите /login для входа.",
         parse_mode="Markdown"
     )
 
@@ -216,7 +193,7 @@ async def check_password(message: types.Message, state: FSMContext):
         keyboard = admin_keyboard if is_admin(username) else main_keyboard
         
         await message.answer(
-            "✅ *Доступ разрешен!*\n\n🤖 Модель: Kimi K-2.5 (256K контекста)\n\nТеперь вы можете использовать бота.",
+            "✅ *Доступ разрешен!*\n\n🤖 Модель: Google Gemini 2.0 Flash\n\nТеперь вы можете использовать бота.",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
@@ -286,8 +263,7 @@ async def admin_commands(message: types.Message):
             f"👥 Вайт-лист: {len(whitelist)}\n"
             f"🔐 По паролю: {len(authorized_users)}\n"
             f"💬 Диалогов: {len([h for h in user_history.values() if h])}\n\n"
-            f"🤖 Модель: Kimi K-2.5\n"
-            f"📚 Контекст: 256K токенов",
+            f"🤖 Модель: Google Gemini 2.0 Flash",
             parse_mode="Markdown"
         )
     
@@ -355,8 +331,7 @@ async def admin_stats_btn(message: types.Message):
         f"📊 *Статистика*\n\n"
         f"👥 Вайт-лист: {len(whitelist)}\n"
         f"🔐 По паролю: {len(authorized_users)}\n\n"
-        f"🤖 Модель: Kimi K-2.5\n"
-        f"📚 Контекст: 256K токенов",
+        f"🤖 Модель: Google Gemini 2.0 Flash",
         parse_mode="Markdown"
     )
 
@@ -383,7 +358,7 @@ async def cmd_ask(message: types.Message):
     
     await bot.send_chat_action(message.chat.id, "typing")
     history = user_history.get(user_id, [])
-    response = await ask_kimi(question, history)
+    response = await ask_gemini(question, history)
     
     if user_id not in user_history:
         user_history[user_id] = []
@@ -392,7 +367,7 @@ async def cmd_ask(message: types.Message):
     if len(user_history[user_id]) > 20:
         user_history[user_id] = user_history[user_id][-20:]
     
-    await message.answer(f"🤖 *Kimi K-2.5:*\n\n{response}", parse_mode="Markdown")
+    await message.answer(f"🤖 *Gemini:*\n\n{response}", parse_mode="Markdown")
 
 @dp.message(Command("clear"))
 async def cmd_clear(message: types.Message):
@@ -406,29 +381,28 @@ async def cmd_help(message: types.Message):
     await message.answer(
         "📚 *Команды*\n\n"
         "/login — вход по паролю\n"
-        "/ask [вопрос] — вопрос Kimi K-2.5\n"
+        "/ask [вопрос] — вопрос Gemini\n"
         "/clear — очистить историю\n"
         "/info — о боте\n"
         "/help — справка\n\n"
         "📸 *Фото:* отправьте фото задачи — бот распознает текст и решит её!\n\n"
-        "🤖 *Модель:* Kimi K-2.5 (256K контекста)",
+        "🤖 *Модель:* Google Gemini 2.0 Flash",
         parse_mode="Markdown"
     )
 
 @dp.message(Command("info"))
 async def cmd_info(message: types.Message):
     await message.answer(
-        "🤖 *Kimi K-2.5 Telegram Bot*\n\n"
+        "🤖 *Gemini Telegram Bot*\n\n"
         "👨‍💻 *Создатель:* Тороп Никита\n"
-        "🤖 *Модель:* Kimi K-2.5 (Moonshot AI)\n"
-        "📚 *Контекст:* 256K токенов\n"
-        "🌐 *API:* platform.moonshot.ai\n"
+        "🤖 *Модель:* Google Gemini 2.0 Flash\n"
+        "📚 *Контекст:* 1M токенов\n"
         "🔧 *Версия:* 4.0\n\n"
         "📌 *Особенности:*\n"
         "• Решение задач по фото\n"
         "• Админ-панель с вайт-листом\n"
         "• История диалога\n"
-        "• Бесплатный доступ",
+        "• Бесплатный доступ (60 запросов/мин)",
         parse_mode="Markdown"
     )
 
@@ -447,7 +421,7 @@ async def btn_creator(message: types.Message):
         "👨‍💻 *Тороп Никита*\n\n"
         "Разработчик Telegram ботов\n"
         "Специализация: Python, aiogram, API нейросетей\n\n"
-        "🤖 Бот использует модель Kimi K-2.5\n"
+        "🤖 Бот использует Google Gemini 2.0 Flash\n"
         "📱 Версия: 4.0",
         parse_mode="Markdown"
     )
@@ -456,8 +430,7 @@ async def btn_creator(message: types.Message):
 async def btn_clear(message: types.Message):
     await cmd_clear(message)
 
-# ===== ОБРАБОТЧИК ФОТО =====
-
+# ===== ОБРАБОТЧИК ФОТО (ИСПРАВЛЕН) =====
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
     user_id = message.from_user.id
@@ -467,7 +440,6 @@ async def handle_photo(message: types.Message):
         await message.answer("🔐 Сначала авторизуйтесь: /login")
         return
     
-    # ... остальной код обработки фото ...
     await bot.send_chat_action(message.chat.id, "typing")
     
     processing_msg = await message.answer("📸 Обрабатываю фото... Распознаю текст...")
@@ -491,7 +463,7 @@ async def handle_photo(message: types.Message):
         
         preview = text[:300] + "..." if len(text) > 300 else text
         await processing_msg.edit_text(
-            f"📝 *Распознанный текст:*\n\n{preview}\n\n🤔 Решаю задачу с помощью Kimi K-2.5...",
+            f"📝 *Распознанный текст:*\n\n{preview}\n\n🤔 Решаю задачу с помощью Gemini...",
             parse_mode="Markdown"
         )
         
@@ -505,7 +477,7 @@ async def handle_photo(message: types.Message):
 {text}"""
         
         history = user_history.get(user_id, [])
-        response = await ask_kimi(prompt, history)
+        response = await ask_gemini(prompt, history)
         
         if user_id not in user_history:
             user_history[user_id] = []
@@ -513,7 +485,7 @@ async def handle_photo(message: types.Message):
         user_history[user_id].append({"role": "assistant", "content": response})
         
         await processing_msg.edit_text(
-            f"📚 *Решение задачи (Kimi K-2.5):*\n\n{response}",
+            f"📚 *Решение задачи (Gemini):*\n\n{response}",
             parse_mode="Markdown"
         )
         
@@ -540,7 +512,7 @@ async def handle_message(message: types.Message):
     
     await bot.send_chat_action(message.chat.id, "typing")
     history = user_history.get(user_id, [])
-    response = await ask_kimi(message.text, history)
+    response = await ask_gemini(message.text, history)
     
     if user_id not in user_history:
         user_history[user_id] = []
@@ -549,7 +521,7 @@ async def handle_message(message: types.Message):
     if len(user_history[user_id]) > 20:
         user_history[user_id] = user_history[user_id][-20:]
     
-    await message.answer(f"🤖 *Kimi K-2.5:*\n\n{response}", parse_mode="Markdown")
+    await message.answer(f"🤖 *Gemini:*\n\n{response}", parse_mode="Markdown")
 
 # ===== ЗАПУСК =====
 async def main():
@@ -559,8 +531,7 @@ async def main():
     print(f"👨‍💻 Админ: @{ADMIN_USERNAME}")
     print(f"🔐 Пароль: {PASSWORD}")
     print(f"📋 Вайт-лист: {len(whitelist)} пользователей")
-    print(f"🤖 Модель: Kimi K-2.5 (Moonshot AI)")
-    print(f"📚 Контекст: 256K токенов")
+    print(f"🤖 Модель: Google Gemini 2.0 Flash")
     print("=" * 50)
     print("✅ Бот готов к работе!")
     
